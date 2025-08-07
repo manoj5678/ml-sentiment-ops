@@ -1,0 +1,52 @@
+# docker-compose.yml
+version: '3.8'
+
+services:
+  sentiment-api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: sentiment-api:latest
+    container_name: sentiment-api
+    ports:
+      - "8000:8000"
+    environment:
+      - LOG_LEVEL=info
+      - API_VERSION=1.0.0
+      - ENVIRONMENT=development
+    healthcheck:
+      test: ["CMD", "python", "-c", "import requests; requests.get('http://localhost:8000/health').raise_for_status()"]
+      interval: 30s
+      timeout: 10s
+      retries: 3
+      start_period: 40s
+    restart: unless-stopped
+    networks:
+      - ml-network
+    labels:
+      - "com.example.description=Sentiment Analysis API"
+      - "com.example.version=1.0.0"
+
+  # Prometheus for monitoring (optional for local dev)
+  prometheus:
+    image: prom/prometheus:latest
+    container_name: prometheus
+    ports:
+      - "9090:9090"
+    volumes:
+      - ./prometheus.yml:/etc/prometheus/prometheus.yml
+      - prometheus_data:/prometheus
+    command:
+      - '--config.file=/etc/prometheus/prometheus.yml'
+      - '--storage.tsdb.path=/prometheus'
+    networks:
+      - ml-network
+    depends_on:
+      - sentiment-api
+
+networks:
+  ml-network:
+    driver: bridge
+
+volumes:
+  prometheus_data:

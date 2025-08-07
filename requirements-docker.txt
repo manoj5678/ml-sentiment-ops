@@ -1,0 +1,10 @@
+# requirements-docker.txt
+# Minimal requirements for Docker container
+fastapi==0.104.1
+uvicorn[standard]==0.24.0
+pydantic>=2.4.0
+python-multipart==0.0.6
+requests==2.31.0
+
+# For health checks
+httpx==0.25.1
