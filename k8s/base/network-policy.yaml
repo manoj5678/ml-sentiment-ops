@@ -1,0 +1,45 @@
+# k8s/base/network-policy.yaml
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: sentiment-api-network-policy
+  namespace: ml-apps
+spec:
+  podSelector:
+    matchLabels:
+      app: sentiment-api
+  policyTypes:
+  - Ingress
+  - Egress
+  ingress:
+  - from:
+    # Allow traffic from ingress controller
+    - namespaceSelector:
+        matchLabels:
+          name: ingress-nginx
+    # Allow traffic from prometheus
+    - namespaceSelector:
+        matchLabels:
+          name: monitoring
+    # Allow traffic from same namespace
+    - podSelector: {}
+    ports:
+    - protocol: TCP
+      port: 8000
+  egress:
+  # Allow DNS
+  - to:
+    - namespaceSelector: {}
+      podSelector:
+        matchLabels:
+          k8s-app: kube-dns
+    ports:
+    - protocol: UDP
+      port: 53
+  # Allow external HTTPS (for model downloads if needed)
+  - to:
+    - ipBlock:
+        cidr: 0.0.0.0/0
+    ports:
+    - protocol: TCP
+      port: 443

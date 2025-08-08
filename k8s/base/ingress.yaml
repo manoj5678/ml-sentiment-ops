@@ -1,0 +1,32 @@
+# k8s/base/ingress.yaml
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: sentiment-api-ingress
+  namespace: ml-apps
+  labels:
+    app: sentiment-api
+  annotations:
+    nginx.ingress.kubernetes.io/rewrite-target: /
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/proxy-body-size: "1m"
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: sentiment-api.local
+    http:
+      paths:
+      - path: /
+        pathType: Prefix
+        backend:
+          service:
+            name: sentiment-api
+            port:
+              number: 80
+  # For cloud deployment, uncomment and configure TLS
+  # tls:
+  # - hosts:
+  #   - sentiment-api.yourdomain.com
+  #   secretName: sentiment-api-tls

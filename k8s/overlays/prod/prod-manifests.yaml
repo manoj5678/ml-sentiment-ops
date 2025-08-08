@@ -1,0 +1,213 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  labels:
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/name: sentiment-api
+    environment: development
+    managed-by: kubectl
+    name: ml-apps
+  name: ml-apps-prod
+---
+apiVersion: v1
+data:
+  api_timeout: "30"
+  environment: production
+  log_level: info
+  max_batch_size: "10"
+kind: ConfigMap
+metadata:
+  name: prod-sentiment-api-config-9fg2fh7btt
+  namespace: ml-apps-prod
+---
+apiVersion: v1
+kind: Service
+metadata:
+  annotations:
+    prometheus.io/path: /metrics
+    prometheus.io/port: "80"
+    prometheus.io/scrape: "true"
+  labels:
+    app: sentiment-api
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/name: sentiment-api
+  name: prod-sentiment-api
+  namespace: ml-apps-prod
+spec:
+  ports:
+  - name: http
+    port: 80
+    protocol: TCP
+    targetPort: http
+  selector:
+    app: sentiment-api
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/name: sentiment-api
+  sessionAffinity: None
+  type: ClusterIP
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: sentiment-api
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/name: sentiment-api
+    component: backend
+    version: v1
+  name: prod-sentiment-api
+  namespace: ml-apps-prod
+spec:
+  replicas: 3
+  selector:
+    matchLabels:
+      app: sentiment-api
+      app.kubernetes.io/component: backend
+      app.kubernetes.io/name: sentiment-api
+  template:
+    metadata:
+      annotations:
+        prometheus.io/path: /metrics
+        prometheus.io/port: "8000"
+        prometheus.io/scrape: "true"
+      labels:
+        app: sentiment-api
+        app.kubernetes.io/component: backend
+        app.kubernetes.io/name: sentiment-api
+        version: v1
+    spec:
+      containers:
+      - env:
+        - name: LOG_LEVEL
+          valueFrom:
+            configMapKeyRef:
+              key: log_level
+              name: prod-sentiment-api-config-9fg2fh7btt
+        - name: ENVIRONMENT
+          valueFrom:
+            configMapKeyRef:
+              key: environment
+              name: prod-sentiment-api-config-9fg2fh7btt
+        - name: MODEL_VERSION
+          value: mock-model-v1
+        image: sentiment-api:latest
+        imagePullPolicy: IfNotPresent
+        livenessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 30
+          periodSeconds: 10
+          timeoutSeconds: 5
+        name: sentiment-api
+        ports:
+        - containerPort: 8000
+          name: http
+          protocol: TCP
+        readinessProbe:
+          failureThreshold: 3
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 10
+          periodSeconds: 5
+          successThreshold: 1
+          timeoutSeconds: 3
+        resources:
+          limits:
+            cpu: 500m
+            memory: 512Mi
+          requests:
+            cpu: 250m
+            memory: 256Mi
+        startupProbe:
+          failureThreshold: 30
+          httpGet:
+            path: /health
+            port: http
+          initialDelaySeconds: 0
+          periodSeconds: 10
+          timeoutSeconds: 3
+      restartPolicy: Always
+      terminationGracePeriodSeconds: 30
+---
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  labels:
+    app: sentiment-api
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/name: sentiment-api
+  name: prod-sentiment-api-hpa
+  namespace: ml-apps-prod
+spec:
+  behavior:
+    scaleDown:
+      policies:
+      - periodSeconds: 60
+        type: Percent
+        value: 50
+      - periodSeconds: 60
+        type: Pods
+        value: 2
+      selectPolicy: Min
+      stabilizationWindowSeconds: 300
+    scaleUp:
+      policies:
+      - periodSeconds: 60
+        type: Percent
+        value: 100
+      - periodSeconds: 60
+        type: Pods
+        value: 4
+      selectPolicy: Max
+      stabilizationWindowSeconds: 60
+  maxReplicas: 10
+  metrics:
+  - resource:
+      name: cpu
+      target:
+        averageUtilization: 70
+        type: Utilization
+    type: Resource
+  - resource:
+      name: memory
+      target:
+        averageUtilization: 80
+        type: Utilization
+    type: Resource
+  minReplicas: 2
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: prod-sentiment-api
+---
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  annotations:
+    nginx.ingress.kubernetes.io/proxy-body-size: 1m
+    nginx.ingress.kubernetes.io/proxy-read-timeout: "60"
+    nginx.ingress.kubernetes.io/proxy-send-timeout: "60"
+    nginx.ingress.kubernetes.io/rate-limit: "100"
+    nginx.ingress.kubernetes.io/rewrite-target: /
+  labels:
+    app: sentiment-api
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/name: sentiment-api
+  name: prod-sentiment-api-ingress
+  namespace: ml-apps-prod
+spec:
+  ingressClassName: nginx
+  rules:
+  - host: sentiment-api.local
+    http:
+      paths:
+      - backend:
+          service:
+            name: prod-sentiment-api
+            port:
+              number: 80
+        path: /
+        pathType: Prefix

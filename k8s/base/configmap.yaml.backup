@@ -1,0 +1,13 @@
+# k8s/base/configmap.yaml
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: sentiment-api-config
+  namespace: ml-apps
+  labels:
+    app: sentiment-api
+data:
+  log_level: "info"
+  environment: "development"
+  api_timeout: "30"
+  max_batch_size: "10"

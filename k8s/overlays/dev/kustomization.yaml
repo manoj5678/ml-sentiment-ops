@@ -1,0 +1,36 @@
+apiVersion: kustomize.config.k8s.io/v1beta1
+kind: Kustomization
+
+namespace: ml-apps-dev
+
+resources:
+  - ../../base
+
+namePrefix: dev-
+
+replicas:
+  - name: sentiment-api
+    count: 1
+
+# Generate ConfigMap for dev
+configMapGenerator:
+  - name: sentiment-api-config
+    literals:
+      - log_level=debug
+      - environment=development
+      - api_timeout=30
+      - max_batch_size=10
+
+patchesJson6902:
+  - target:
+      group: apps
+      version: v1
+      kind: Deployment
+      name: sentiment-api
+    patch: |-
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/memory
+        value: "128Mi"
+      - op: replace
+        path: /spec/template/spec/containers/0/resources/requests/cpu
+        value: "100m"

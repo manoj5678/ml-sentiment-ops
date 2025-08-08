@@ -1,0 +1,9 @@
+# k8s/base/namespace.yaml
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: ml-apps
+  labels:
+    name: ml-apps
+    environment: development
+    managed-by: kubectl
