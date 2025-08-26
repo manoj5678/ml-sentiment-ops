@@ -1,0 +1,264 @@
+# .gitlab-ci.yml
+# GitLab CI/CD Pipeline for MLOps Sentiment Analysis
+
+# Define stages
+stages:
+  - test
+  - build
+  - security
+  - deploy-dev
+  - test-integration
+  - deploy-prod
+
+# Global variables
+variables:
+  DOCKER_DRIVER: overlay2
+  DOCKER_TLS_CERTDIR: ""
+  IMAGE_NAME: ${CI_REGISTRY_IMAGE}/sentiment-api
+  PYTHON_VERSION: "3.11"
+
+# Default settings
+default:
+  tags:
+    - docker
+
+# Cache Python dependencies
+.python_cache: &python_cache
+  cache:
+    key: ${CI_COMMIT_REF_SLUG}-python
+    paths:
+      - .cache/pip
+      - venv/
+
+# ==================================
+# Stage: Test
+# ==================================
+test:unit:
+  stage: test
+  image: python:${PYTHON_VERSION}-slim
+  <<: *python_cache
+  before_script:
+    - pip install --upgrade pip
+    - pip install -r requirements-test.txt
+  script:
+    - echo "Running unit tests..."
+    - pytest tests/ -v --cov=src --cov-report=xml --cov-report=term-missing
+    - echo "Test coverage:"
+    - coverage report
+  coverage: '/TOTAL.*\s+(\d+%)$/'
+  artifacts:
+    reports:
+      coverage_report:
+        coverage_format: cobertura
+        path: coverage.xml
+    paths:
+      - coverage.xml
+      - htmlcov/
+    expire_in: 1 week
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+
+test:lint:
+  stage: test
+  image: python:${PYTHON_VERSION}-slim
+  before_script:
+    - pip install black flake8 mypy
+  script:
+    - echo "Running code quality checks..."
+    - black --check src/ tests/ || true
+    - flake8 src/ tests/ --max-line-length=88 || true
+  allow_failure: true
+  rules:
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+# ==================================
+# Stage: Build
+# ==================================
+build:docker:
+  stage: build
+  image: docker:24.0.5
+  services:
+    - docker:24.0.5-dind
+  before_script:
+    - echo "$CI_REGISTRY_PASSWORD" | docker login -u "$CI_REGISTRY_USER" --password-stdin $CI_REGISTRY
+  script:
+    - echo "Building Docker image..."
+    - docker build -t ${IMAGE_NAME}:${CI_COMMIT_SHA} .
+    - docker tag ${IMAGE_NAME}:${CI_COMMIT_SHA} ${IMAGE_NAME}:${CI_COMMIT_REF_SLUG}
+    - |
+      if [ "$CI_COMMIT_BRANCH" == "main" ]; then
+        docker tag ${IMAGE_NAME}:${CI_COMMIT_SHA} ${IMAGE_NAME}:latest
+      fi
+    - echo "Pushing images to GitLab Container Registry..."
+    - docker push ${IMAGE_NAME}:${CI_COMMIT_SHA}
+    - docker push ${IMAGE_NAME}:${CI_COMMIT_REF_SLUG}
+    - |
+      if [ "$CI_COMMIT_BRANCH" == "main" ]; then
+        docker push ${IMAGE_NAME}:latest
+      fi
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+    - if: '$CI_PIPELINE_SOURCE == "merge_request_event"'
+
+# ==================================
+# Stage: Security
+# ==================================
+security:trivy:
+  stage: security
+  image: aquasec/trivy:latest
+  script:
+    - echo "Running security scan with Trivy..."
+    - trivy image --severity HIGH,CRITICAL ${IMAGE_NAME}:${CI_COMMIT_SHA}
+  artifacts:
+    reports:
+      container_scanning: trivy-report.json
+  dependencies:
+    - build:docker
+  allow_failure: true
+  rules:
+    - if: '$CI_COMMIT_BRANCH == "main"'
+    - if: '$CI_COMMIT_BRANCH == "develop"'
+
+security:sast:
+  stage: security
+  image: python:${PYTHON_VERSION}-slim
+  before_script:
+    - pip install bandit safety
+  script:
+    - echo "Running SAST scan..."
+    - bandit -r src/ -f json -o bandit-report.json || true
+    - safety check --json > safety-report.json || true
+  artifacts:
+    paths:
+      - bandit-report.json
+      - safety-report.json
+    expire_in: 1 week
+  allow_failure: true
+
+# ==================================
+# Stage: Deploy to Development
+# ==================================
+deploy:dev:
+  stage: deploy-dev
+  image: bitnami/kubectl:latest
+  before_script:
+    - echo "Setting up kubectl..."
+    - echo "$KUBE_CONFIG_DEV" | base64 -d > ~/.kube/config
+  script:
+    - echo "Updating development deployment..."
+    - |
+      cd k8s/overlays/dev
+      kubectl kustomize . | sed "s|image: .*|image: ${IMAGE_NAME}:${CI_COMMIT_SHA}|g" | kubectl apply -f -
+    - kubectl wait --for=condition=available --timeout=300s deployment/dev-sentiment-api -n ml-apps-dev
+    - echo "Development deployment successful!"
+  environment:
+    name: development
+    url: https://sentiment-api-dev.yourdomain.com
+  only:
+    - develop
+    - main
+
+deploy:dev:argocd:
+  stage: deploy-dev
+  image: argoproj/argocd:v2.8.0
+  before_script:
+    - argocd login $ARGOCD_SERVER --username $ARGOCD_USERNAME --password $ARGOCD_PASSWORD --insecure
+  script:
+    - echo "Triggering ArgoCD sync for development..."
+    - argocd app sync sentiment-api-dev --force
+    - argocd app wait sentiment-api-dev --health
+  environment:
+    name: development
+    url: https://sentiment-api-dev.yourdomain.com
+  when: manual
+  only:
+    - develop
+    - main
+
+# ==================================
+# Stage: Integration Tests
+# ==================================
+test:integration:
+  stage: test-integration
+  image: curlimages/curl:latest
+  script:
+    - echo "Running integration tests against dev environment..."
+    - |
+      # Health check
+      curl -f https://sentiment-api-dev.yourdomain.com/health || exit 1
+      
+      # Test prediction endpoint
+      curl -f -X POST https://sentiment-api-dev.yourdomain.com/predict \
+        -H "Content-Type: application/json" \
+        -d '{"texts": ["Integration test from CI/CD"]}' || exit 1
+      
+      echo "Integration tests passed!"
+  dependencies:
+    - deploy:dev
+  only:
+    - develop
+    - main
+
+# ==================================
+# Stage: Deploy to Production
+# ==================================
+deploy:prod:
+  stage: deploy-prod
+  image: bitnami/kubectl:latest
+  before_script:
+    - echo "Setting up kubectl for production..."
+    - echo "$KUBE_CONFIG_PROD" | base64 -d > ~/.kube/config
+  script:
+    - echo "Updating production deployment..."
+    - |
+      cd k8s/overlays/prod
+      kubectl kustomize . | sed "s|image: .*|image: ${IMAGE_NAME}:${CI_COMMIT_SHA}|g" | kubectl apply -f -
+    - kubectl wait --for=condition=available --timeout=300s deployment/prod-sentiment-api -n ml-apps-prod
+    - echo "Production deployment successful!"
+  environment:
+    name: production
+    url: https://sentiment-api.yourdomain.com
+  when: manual
+  only:
+    - main
+
+deploy:prod:argocd:
+  stage: deploy-prod
+  image: argoproj/argocd:v2.8.0
+  before_script:
+    - argocd login $ARGOCD_SERVER --username $ARGOCD_USERNAME --password $ARGOCD_PASSWORD --insecure
+  script:
+    - echo "Triggering ArgoCD sync for production..."
+    - argocd app sync sentiment-api-prod
+    - argocd app wait sentiment-api-prod --health
+  environment:
+    name: production
+    url: https://sentiment-api.yourdomain.com
+  when: manual
+  only:
+    - main
+
+# ==================================
+# Additional Jobs
+# ==================================
+update:manifests:
+  stage: deploy-dev
+  image: alpine/git:latest
+  before_script:
+    - git config --global user.email "gitlab-ci@yourdomain.com"
+    - git config --global user.name "GitLab CI"
+  script:
+    - echo "Updating Kubernetes manifests with new image tag..."
+    - |
+      git clone https://$CI_REGISTRY_USER:$CI_REGISTRY_PASSWORD@$CI_SERVER_HOST/$CI_PROJECT_PATH.git repo
+      cd repo/k8s/overlays/dev
+      sed -i "s|newTag: .*|newTag: ${CI_COMMIT_SHA}|g" kustomization.yaml
+      git add kustomization.yaml
+      git commit -m "chore: update dev image tag to ${CI_COMMIT_SHA}" || echo "No changes to commit"
+      git push origin HEAD:$CI_COMMIT_REF_NAME
+  only:
+    - develop
+    - main

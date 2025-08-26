@@ -1,0 +1,107 @@
+# .github/workflows/cd.yml
+name: CD Pipeline
+
+on:
+  workflow_run:
+    workflows: ["CI Pipeline"]
+    types:
+      - completed
+    branches: [main]
+
+env:
+  REGISTRY: ghcr.io
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  deploy-dev:
+    name: Deploy to Development
+    if: ${{ github.event.workflow_run.conclusion == 'success' }}
+    runs-on: ubuntu-latest
+    environment: development
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Configure AWS credentials
+      uses: aws-actions/configure-aws-credentials@v4
+      with:
+        aws-access-key-id: ${{ secrets.AWS_ACCESS_KEY_ID }}
+        aws-secret-access-key: ${{ secrets.AWS_SECRET_ACCESS_KEY }}
+        aws-region: ${{ vars.AWS_REGION }}
+    
+    # If using EKS
+    - name: Update kubeconfig
+      run: |
+        aws eks update-kubeconfig --name ${{ vars.EKS_CLUSTER_NAME }} --region ${{ vars.AWS_REGION }}
+    
+    # For ArgoCD sync
+    - name: Trigger ArgoCD Sync
+      run: |
+        # Install ArgoCD CLI
+        curl -sSL -o /usr/local/bin/argocd https://github.com/argoproj/argo-cd/releases/latest/download/argocd-linux-amd64
+        chmod +x /usr/local/bin/argocd
+        
+        # Login to ArgoCD
+        argocd login ${{ vars.ARGOCD_SERVER }} \
+          --username ${{ secrets.ARGOCD_USERNAME }} \
+          --password ${{ secrets.ARGOCD_PASSWORD }} \
+          --insecure
+        
+        # Sync application
+        argocd app sync sentiment-api-dev
+        argocd app wait sentiment-api-dev --health
+
+  integration-tests:
+    name: Run Integration Tests
+    needs: deploy-dev
+    runs-on: ubuntu-latest
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Run API tests
+      run: |
+        # Wait for deployment to be ready
+        sleep 30
+        
+        # Run integration tests against dev environment
+        API_URL=${{ vars.DEV_API_URL }}
+        
+        # Health check
+        curl -f ${API_URL}/health || exit 1
+        
+        # Test prediction endpoint
+        curl -f -X POST ${API_URL}/predict \
+          -H "Content-Type: application/json" \
+          -d '{"texts": ["Integration test"]}' || exit 1
+
+  deploy-prod:
+    name: Deploy to Production
+    needs: integration-tests
+    runs-on: ubuntu-latest
+    environment: production
+    if: github.ref == 'refs/heads/main'
+    
+    steps:
+    - name: Checkout code
+      uses: actions/checkout@v4
+    
+    - name: Update production image tag
+      run: |
+        cd k8s/overlays/prod
+        sed -i "s|newTag:.*|newTag: ${GITHUB_SHA::8}|" kustomization.yaml
+    
+    - name: Create Pull Request for Production
+      uses: peter-evans/create-pull-request@v5
+      with:
+        token: ${{ secrets.GITHUB_TOKEN }}
+        commit-message: "chore: promote ${GITHUB_SHA::8} to production"
+        title: "Deploy ${GITHUB_SHA::8} to Production"
+        body: |
+          Automated deployment to production
+          - Image tag: ${GITHUB_SHA::8}
+          - Triggered by: ${{ github.actor }}
+        branch: deploy/prod-${GITHUB_SHA::8}
+        base: main

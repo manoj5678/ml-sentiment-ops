@@ -1,0 +1,35 @@
+# argocd/applications/sentiment-api-prod.yaml
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: sentiment-api-prod
+  namespace: argocd
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: default
+  
+  source:
+    repoURL: https://github.com/$YOUR_GITHUB_USERNAME/ml-sentiment-ops
+    targetRevision: HEAD
+    path: k8s/overlays/prod
+  
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: ml-apps-prod
+  
+  syncPolicy:
+    # Manual sync for production
+    automated: false
+    syncOptions:
+    - CreateNamespace=true
+    - PrunePropagationPolicy=foreground
+    - ApplyOutOfSyncOnly=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 5s
+        factor: 2
+        maxDuration: 3m
+  
+  revisionHistoryLimit: 10

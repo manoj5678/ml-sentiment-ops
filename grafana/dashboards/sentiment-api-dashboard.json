@@ -1,0 +1,100 @@
+{
+  "dashboard": {
+    "title": "Sentiment Analysis API Monitoring",
+    "panels": [
+      {
+        "title": "Request Rate",
+        "gridPos": {"x": 0, "y": 0, "w": 12, "h": 8},
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "sum(rate(sentiment_predictions_total[5m])) by (status)",
+            "legendFormat": "{{status}}"
+          }
+        ]
+      },
+      {
+        "title": "Response Time (P50, P95, P99)",
+        "gridPos": {"x": 12, "y": 0, "w": 12, "h": 8},
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "histogram_quantile(0.5, sum(rate(sentiment_prediction_duration_seconds_bucket[5m])) by (le))",
+            "legendFormat": "P50"
+          },
+          {
+            "expr": "histogram_quantile(0.95, sum(rate(sentiment_prediction_duration_seconds_bucket[5m])) by (le))",
+            "legendFormat": "P95"
+          },
+          {
+            "expr": "histogram_quantile(0.99, sum(rate(sentiment_prediction_duration_seconds_bucket[5m])) by (le))",
+            "legendFormat": "P99"
+          }
+        ]
+      },
+      {
+        "title": "Active Requests",
+        "gridPos": {"x": 0, "y": 8, "w": 8, "h": 6},
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "sentiment_active_requests"
+          }
+        ]
+      },
+      {
+        "title": "Total Predictions",
+        "gridPos": {"x": 8, "y": 8, "w": 8, "h": 6},
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "sum(sentiment_predictions_total)"
+          }
+        ]
+      },
+      {
+        "title": "Error Rate",
+        "gridPos": {"x": 16, "y": 8, "w": 8, "h": 6},
+        "type": "stat",
+        "targets": [
+          {
+            "expr": "sum(rate(sentiment_predictions_total{status=\"error\"}[5m])) / sum(rate(sentiment_predictions_total[5m])) * 100"
+          }
+        ],
+        "options": {
+          "unit": "percent"
+        }
+      },
+      {
+        "title": "Pod CPU Usage",
+        "gridPos": {"x": 0, "y": 14, "w": 12, "h": 8},
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "sum(rate(container_cpu_usage_seconds_total{pod=~\".*sentiment-api.*\"}[5m])) by (pod)",
+            "legendFormat": "{{pod}}"
+          }
+        ]
+      },
+      {
+        "title": "Pod Memory Usage",
+        "gridPos": {"x": 12, "y": 14, "w": 12, "h": 8},
+        "type": "graph",
+        "targets": [
+          {
+            "expr": "sum(container_memory_usage_bytes{pod=~\".*sentiment-api.*\"}) by (pod) / 1024 / 1024",
+            "legendFormat": "{{pod}}"
+          }
+        ],
+        "options": {
+          "unit": "MB"
+        }
+      }
+    ],
+    "time": {
+      "from": "now-1h",
+      "to": "now"
+    },
+    "refresh": "10s"
+  }
+}
